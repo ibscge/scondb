@@ -1,0 +1,55 @@
+.sequence {
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 15px;
+  width: calc(100 * 1ch);
+  font-family: "Courier New", monospace; /* You can use any other monospace font */
+}
+
+.exon.dna-char {
+  /* background-color: #ffebcd; */
+}
+
+.dna-char {
+  width: 1ch;
+  box-sizing: border-box; /* Makes sure padding and border are included in the width */
+  margin-right: 0.1ch;
+  text-align: center;
+}
+
+.dna-char.exon.scon {
+  color: orangered;
+}
+
+.dna-char.exon.hovered {
+  font-weight: bold;
+  background-color: #ffebcd;
+}
+
+.dna-char.left-pam {
+  /* background-color: orangered; */
+  color: greenyellow;
+}
+.dna-char.right-pam {
+  /* background-color: olivedrab; */
+  color: olivedrab;
+}
+
+/* .dna-char.target {
+  background-color: olivedrab;
+  color: yellow;
+} */
+
+.line-break::after {
+  content: "\a";
+  white-space: pre;
+}
+
+.chunk-sep::after {
+  content: " ";
+  white-space: pre;
+}
+.chunk-sep-sep::after {
+  content: "  ";
+  white-space: pre;
+}
