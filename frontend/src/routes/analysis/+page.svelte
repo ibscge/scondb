@@ -719,30 +719,29 @@
                 {/each}
             {/if}-->
         {#if sequence && cexoninfo}
-            <div class="relative overflow-x-auto font-mono text-[15px] w-full">
-              <div class="absolute top-0 left-0 flex">
-                {#each sequence as _, i}
-                  <span class="block w-[1ch] text-center text-gray-300">
-                    {Number(cexoninfo[0]?.Exon_strand) === 1 ? ">" : "<"}
-                  </span>
-                {/each}
+            <div class="overflow-x-auto">
+                <div class="flex flex-col min-w-max font-mono text-[15px]">
+                  <div class="flex leading-none">
+                    {#each chevronTrack.split("") as c}
+                      <span class="w-[1ch] text-center text-gray-300">{c}</span>
+                    {/each}
+                  </div>
+                  <div class="flex leading-none">
+                    {#each sequence as s}
+                      <span
+                        class="w-[1ch] text-center {getClassForBackground(s, hoveredRow, hoveredPAM)}"
+                        class:font-bold={hoveredRow && s.pos >= hoveredRow.start && s.pos <= hoveredRow.end}
+                        class:text-emerald-400={s.className.includes("exon") && s.className.includes("left-pam")}
+                        class:text-emerald-800={s.className.includes("exon") && s.className.includes("right-pam")}
+                        class:text-red-700={s.className.includes("exon") && s.className.includes("scon_MAGR")}
+                      >
+                        {s.base}
+                      </span>
+                    {/each}
+                  </div>
+                </div>
               </div>
-          
-              <div class="relative flex">
-                {#each sequence as s}
-                  <span
-                    class="block w-[1ch] text-center"
-                    class:font-bold={hoveredRow && s.pos >= hoveredRow.start && s.pos <= hoveredRow.end}
-                    class:text-emerald-400={s.className.includes("exon") && s.className.includes("left-pam")}
-                    class:text-emerald-800={s.className.includes("exon") && s.className.includes("right-pam")}
-                    class:text-red-700={s.className.includes("exon") && s.className.includes("scon_MAGR")}
-                  >
-                    {s.base}
-                  </span>
-                {/each}
-              </div>
-            </div>
-          {/if}
+            {/if}
         <div class="max-h-[40rem] overflow-y-auto">
             <Table>
                 <TableHead>
