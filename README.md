@@ -1,34 +1,38 @@
-Universal conditional knockout approach to multiple species, from fish to human cells
+# Universal conditional knockout approach to multiple species, from fish to human cells
+
 
 This repository accompanies our study introducing SCON, a simplified, adaptable, and universal strategy for generating conditional loss-of-function alleles in model systems where traditional approaches are inefficient.
 
-Overview
+
+## Overview
 Studying essential genes involved in early development is challenging due to their lethality and the need for precise, conditional inactivation. Our platform provides a scalable and efficient solution for conditional knockout (cKO) design in:
 
-Zebrafish
-
-Human induced pluripotent stem cells (iPSCs)
-
-Intestinal organoids
+- **Zebrafish**
+- **Human induced pluripotent stem cells (iPSCs)**
+- **Intestinal organoids**
 
 We also present a web-based database supporting over 300 vertebrate species, enabling researchers to identify candidate sites for conditional knockouts based on species-specific genome annotations.
 
-Web Resource
+
+## Web Resource
+
 Explore the online database and design your conditional knockouts:
 https://genpos.org
 
-Contents
+
+## Contents
 This repository includes:
 
-Sample code and design files for SCON cassette insertion
+- Sample code and design files for SCON cassette insertion
 
-Genome annotation data and target site filtering logic
+- Genome annotation data and target site filtering logic
 
-Tutorials for applying SCON in different biological systems
+- Tutorials for applying SCON in different biological systems
 
-Documentation for using the web-based design tool
+- Documentation for using the web-based design tool
 
-Citation
+
+## Citation
 If you use SCON or SCON-DB in your research, please cite:
 
 
