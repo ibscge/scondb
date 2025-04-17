@@ -13,13 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
-app = FastAPI()
+app = FastAPI(
+    title="SCON API",
+    version="1.0.0",
+    root_path="/api/v1"
+)
 
-origins = [
-     #"http://118.42.91.16:11156",
-]
-
-
+origins = []
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,48 +32,52 @@ app.add_middleware(
 
 
 
-#df_meta = pd.concat([pd.read_csv('data/scon_output_meta.csv'),
+#df_meta = pd.concat([pd.read_csv('./data/scon_output_meta.csv'),
 #                    pd.read_csv('scon_outputs/scon_output_meta.csv')]).sort_values(['species', 'ensemble_rev'])
-df_meta = pd.read_csv('data/scon_output_meta.csv').sort_values(['species', 'ensemble_rev'])
-df_meta['label']=df_meta.apply(lambda x: f"{x.species} {x.grcm_ver} (v.{x.ensemble_rev}) ", axis=1)
-df_meta['group_label']=df_meta.apply(lambda x: f"Ensembl ver: {x.ensemble_rev}", axis=1)
+df_meta_magr = pd.read_csv('./data/scon_magr_outputs/scon_output_meta.csv').sort_values(['species', 'ensemble_rev']) 
+#col.names = species, grcm_ver, ensemble_rev, scon_file
+df_meta_magr['label']=df_meta_magr.apply(lambda x: f"{x.species} {x.grcm_ver} (v.{x.ensemble_rev}) ", axis=1)
+df_meta_magr['group_label']=df_meta_magr.apply(lambda x: f"Ensemble ver: {x.ensemble_rev}", axis=1) 
+
+df_meta_vdgn = pd.read_csv('./data/scon_vdgn_outputs/scon_output_meta.csv').sort_values(['species', 'ensemble_rev']) 
+# #col.names = species, grcm_ver, ensemble_rev, scon_file
+df_meta_vdgn['label']=df_meta_vdgn.apply(lambda x: f"{x.species} {x.grcm_ver} (v.{x.ensemble_rev}) ", axis=1)
+df_meta_vdgn['group_label']=df_meta_vdgn.apply(lambda x: f"Ensemble ver: {x.ensemble_rev}", axis=1) 
+#col.names = species, grcm_ver, ensemble_rev, scon_file, label, group_label
+#group_label = ensemble ver
+
 
 def get_group_items(df):
     return df.apply(lambda x: x.to_dict(), axis=1).tolist()
 
-species_group_items = [{'label': name, 'code': name,
-                        'ensemble_rev': float(df.iloc[0].ensemble_rev),
-                        'items':get_group_items(df)} for name, df in df_meta.groupby('group_label')]
 
-def load_scon_data(scon_file):
-    print(f'data/{scon_file.replace(".csv", ".parquet")}')
-    df_scon = pd.read_parquet(f'data/{scon_file.replace(".csv", ".parquet")}')
-    print(df_scon.shape)
-    # df_scon = pd.read_parquet('data/scon_output.MAGR.parquet')
+def load_scon_data(scon_file, type:str):
+    if (type == "VDGN"):
+        print(f'./data/scon_vdgn_outputs/{scon_file}')
+        df_scon = pd.read_parquet(f'./data/scon_vdgn_outputs/{scon_file}')
+        print(df_scon.shape)
+    else:
+        print(f'./data/scon_magr_outputs/{scon_file}')
+        df_scon = pd.read_parquet(f'./data/scon_magr_outputs/{scon_file}')
+        print(df_scon.shape)
+    # df_scon = pd.read_parquet('./data/scon_output.MAGR.parquet')
     df_scon.Exon_usage=df_scon.Exon_usage.fillna(0).astype(int)
     df_scon.GC=df_scon.GC.fillna(0).astype(int)
     return df_scon
 
-
-@app.get('/meta/species_groups')
-async def list_species():    
-    return species_group_items
-
-
-
-@app.get('/meta/species')
-async def list_species():
-    species = sorted(list(set(df_meta.species)))
-    return [{'name':x, 'code':x} for x in species]
-
-
-
 @app.get('/meta/dataset')
-async def list_dataset(species: str = None):
+#from metadata
+async def list_dataset(type: str, species: str = None):
+    if (type == 'MAGR'):
+        df_meta = df_meta_magr
+    else:
+        df_meta = df_meta_vdgn
+
     if species:
         tmp=df_meta.query(f'species=="{species}"')
     else:
         tmp=df_meta
+    
     if tmp.empty:
         return []
     datasets = [{'key': row.ensemble_rev,
@@ -86,43 +90,38 @@ async def list_dataset(species: str = None):
 
 
 @app.get('/sconable_genes')
-async def sconable_genes(species: str, ensemble_rev: int):
+#from metadata of scon_file.Gene
+#SCON run search
+async def sconable_genes(species: str, ensemble_rev: int, type:str):
+    if (type == 'MAGR'):
+        df_meta = df_meta_magr
+    else:
+        df_meta = df_meta_vdgn
     df_row = df_meta.query(f'species=="{species}" and ensemble_rev=={ensemble_rev}')
     if df_row.empty:
         return []
     scon_file = df_row.scon_file.iloc[0]
 #     scon_sites = df_scon.query(f'scon_file=="{scon_file}"')
-    scon_sites = load_scon_data(scon_file)
-    
+    scon_sites = load_scon_data(scon_file, type)
     return [{'name':x, 'code':x} for x in sorted(set(scon_sites.Gene))]
 
-
-
-@app.get('/sconable_sites')
-async def sconable_sites(species: str, ensemble_rev: int, gene: str):
+@app.get('/sconable_sites_group')
+#PAM position grouping
+async def sconable_sites_group(species: str, ensemble_rev: int, gene: str, type: str):
+    if (type == 'MAGR'):
+        df_meta = df_meta_magr
+    else:
+        df_meta = df_meta_vdgn
     df_row = df_meta.query(f'species=="{species}" and ensemble_rev=={ensemble_rev}')
     if df_row.empty:
         return []
     scon_file = df_row.scon_file.iloc[0]
-    df_scon = load_scon_data(scon_file)
-    scon_sites = df_scon.query(f'scon_file=="{scon_file}" and Gene=="{gene}"')
-    scon_sites.index.name='idx'
-    scon_sites= scon_sites.reset_index().replace([np.nan], [None]).to_dict(orient='records')
-    return scon_sites
-
-
-@app.get('/sconable_sites_group')
-async def sconable_sites_group(species: str, ensemble_rev: int, gene: str):
-    df_row = df_meta.query(f'species=="{species}" and ensemble_rev=={ensemble_rev}')
-    if df_row.empty:
-        return ['a']
-    scon_file = df_row.scon_file.iloc[0]
-    df_scon = load_scon_data(scon_file)
+    df_scon = load_scon_data(scon_file, type)
 
     scon_sites = df_scon.query(f'scon_file=="{scon_file}" and Gene=="{gene}"')
     scon_sites= scon_sites.replace([np.nan], [None])
     
-    scon_gene = scon_sites#.eval('id=index')    
+    scon_gene = scon_sites#.eval('id=index')
     scon_gene['id'] = "scon." + scon_sites.Chromosome + "." + scon_sites.Insertion_start.astype(str)
     #return scon_gene.to_dict(orient='records')
     def to_dict(df):        
@@ -141,13 +140,19 @@ async def sconable_sites_group(species: str, ensemble_rev: int, gene: str):
 
 
 @app.get('/sconable_site_count_by_transcript')
-async def sconable_site_count_by_transcript(species: str, ensemble_rev: int, gene: str):
+#Exon - Transcipt all count (+pam)
+#SCONable site
+async def sconable_site_count_by_transcript(species: str, ensemble_rev: int, gene: str, type:str):
+    if (type == 'MAGR'):
+        df_meta = df_meta_magr
+    else:
+        df_meta = df_meta_vdgn
     df_row = df_meta.query(f'species=="{species}" and ensemble_rev=={ensemble_rev}')
     if df_row.empty:
         return []
 
     scon_file = df_row.scon_file.iloc[0]
-    df_scon = load_scon_data(scon_file)
+    df_scon = load_scon_data(scon_file, type)
 
     scon_sites = df_scon.query(f'scon_file=="{scon_file}" and Gene=="{gene}"')
     if scon_sites.empty:
@@ -158,16 +163,25 @@ async def sconable_site_count_by_transcript(species: str, ensemble_rev: int, gen
 
 
 @app.get('/scon_sites_by_transcript')
-async def scon_sites_by_transcript(species: str, ensemble_rev: int, exon: str, transcript: str):
+#seq data
+async def scon_sites_by_transcript(species: str, ensemble_rev: int, exon: str, transcript: str, type: str):
+    if (type == 'MAGR'):
+        df_meta = df_meta_magr
+    else:
+        df_meta = df_meta_vdgn
     df_row = df_meta.query(f'species=="{species}" and ensemble_rev=={ensemble_rev}')
     if df_row.empty:
         return []
+    
 
     scon_file = df_row.scon_file.iloc[0]
-    scon_output = f'data/{scon_file.replace(".csv", ".parquet")}'
-    gtf_file = f'{scon_file.replace(".SCON_DB.csv", "")}'
-    gtf_summary = f'ref_data/{gtf_file}.summary.parquet'
-    fasta_file = f'ref_data/{gtf_file.replace(f".{ensemble_rev}.gtf", ".dna.toplevel.fa")}'
+    if (type == 'MAGR'):
+        scon_output = f'./data/scon_magr_outputs/{scon_file}'
+    else:
+        scon_output = f'./data/scon_vdgn_outputs/{scon_file}'
+    gtf_file = f'./data/ref_data/{scon_file.replace(".SCON_DB.parquet", "")}'
+    gtf_summary = f'{gtf_file}.summary.parquet'
+    fasta_file = f'{gtf_file.replace(f".{ensemble_rev}.gtf", ".dna.toplevel.fa")}'
 
 
     df_scon=pd.read_parquet(scon_output)
@@ -239,4 +253,3 @@ async def scon_sites_by_transcript(species: str, ensemble_rev: int, exon: str, t
     seqs = [x for i, x in bases.items()]
 
     return seqs
-

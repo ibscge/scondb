@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    volumes:
+      - ../scon-data/ref_data:/app/data/ref_data
+      - ../scon-data/scon_magr_outputs:/app/data/scon_magr_outputs
+      - ../scon-data/scon_vdgn_outputs:/app/data/scon_vdgn_outputs
+    restart: always
+  frontend:
+    build:
+      context: ./frontend
+    restart: always
+  caddy:
+    image: caddy:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: always
+    depends_on:
+      - backend
+      - frontend
+volumes:
+  caddy_data:
+  caddy_config:

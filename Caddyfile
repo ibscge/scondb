@@ -1,0 +1,4 @@
+https://genpos.org {
+    reverse_proxy /api/v1/* backend:11156
+    reverse_proxy frontend:3000
+}

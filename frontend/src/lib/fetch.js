@@ -1,5 +1,5 @@
 export async function load(uri, method = 'GET', file = null) {
-	const site_root = 'http://118.42.91.16:11156/';
+	const site_root = 'https://genpos.org/api/v1/';
 	let url = new URL(site_root + uri);
 	console.log(url);
 	let resp;

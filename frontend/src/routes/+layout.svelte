@@ -23,25 +23,34 @@
             open = !open;
         }}>{open ? "<" : ">"}</button
     >
-    {#if open}<Sidebar class="flex w-fit" {activeClass} {nonActiveClass}>
+    {#if open}<Sidebar class="flex w-21" {activeClass} {nonActiveClass}>
             <SidebarWrapper
-                class="py-10 grow overflow-y-visible min-h-screen h-full w-fit"
+                class="py-10 grow overflow-y-visible min-h-screen h-full w-21"
             >
                 <SidebarGroup>
                     <SidebarItem
+                        spanClass="px-3"
                         label="Home"
                         href="/"
                         active={$page.url.pathname === "/"}
                     ></SidebarItem>
                     <SidebarItem
+                        spanClass="px-3"
                         label="Dataset"
                         href="/dataset"
                         active={$page.url.pathname === "/dataset"}
                     ></SidebarItem>
                     <SidebarItem
+                        spanClass="px-3"
                         label="Analysis"
                         href="/analysis"
                         active={$page.url.pathname === "/analysis"}
+                    ></SidebarItem>
+                    <SidebarItem
+                        spanClass="px-3"
+                        label="Tutorial"
+                        href="/tutorial"
+                        active={$page.url.pathname === "/tutorial"}
                     ></SidebarItem>
                 </SidebarGroup>
             </SidebarWrapper>

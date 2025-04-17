@@ -1,0 +1,9 @@
+polars==0.20.31
+gtfparse==2.5.0
+pysam==0.23.0
+numpy==1.26.4
+pandas==2.2.3
+fastparquet==2024.11.0
+fastapi==0.115.12
+sse-starlette==2.2.1
+uvicorn==0.34.1
