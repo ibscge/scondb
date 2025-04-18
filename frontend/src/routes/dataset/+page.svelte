@@ -1,6 +1,6 @@
 <script>
     import { onMount, onDestroy } from "svelte";
-    import { load } from "$lib/fetch";
+    import { load } from "../../lib/fetch";
     import { page } from "$app/stores";
     import {
         Table,
@@ -71,8 +71,12 @@
     });
 </script>
 
-<div class="p-3 w-full px-8">
-    <Heading class="px-5 py-3 pt-5">Available Dataset</Heading>
+<div class="p-10 w-full px-8">
+    <div class="w-full border-b border-gray-300 mb-4 pb-2">
+        <Heading size="2xl" class="text-gray-800 font-bold text-left px-6">
+          Available dataset
+        </Heading>
+      </div>
     <ButtonGroup class="w-full flex py-3 p-3">
         <Button
             color="none"

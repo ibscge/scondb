@@ -34,6 +34,9 @@
     let selectedRadio;
     let lastSelected = "";
     let cachedSpeciesData = {};
+    let isLoadingSequence = false;
+    let isLoadingSconable = false;
+
 
     function toggleClick(index) {
         clickedRows[index] = !clickedRows[index];
@@ -64,8 +67,16 @@
 
     async function load_data(selectedRadio) {
         const metaData = await load(`meta/dataset?type=${selectedRadio}`);
-        allSpecies = metaData.map((e) => e.species);
-        //suggestions = allSpecies;
+        //console.log("🐭 metaData loaded:", metaData);
+        const filtered = metaData.filter(e => {
+            if (e.species === "mus_musculus") {
+                return e.ensemble_rev === 109;
+            }
+            return true;
+        });
+
+        // 중복 제거
+        allSpecies = [...new Set(filtered.map(e => e.species))];
     }
 
     async function fetchData() {
@@ -82,6 +93,8 @@
         //selectSuggestions = selectOptions;
         isLoading = false;
     }
+
+    
 
     function handleInput(event) {
         species = event.target.value;
@@ -138,26 +151,26 @@
     }
 
     async function Search_SCONablesite(species, selected) {
+        isLoadingSconable = true;
+        sconable = null;
+        exoninfo = null;
+
         sconable = await load(
             `sconable_site_count_by_transcript?species=${species}&ensemble_rev=109&gene=${selected}&type=${selectedRadio}`,
         );
-        console.log(sconable);
         exoninfo = await load(
             `sconable_sites_group?species=${species}&ensemble_rev=109&gene=${selected}&type=${selectedRadio}`,
         );
-        console.log(exoninfo);
+
         sconable.rows.forEach((item) => {
             Object.values(item).forEach((value) => {
-                if (
-                    typeof value === "number" &&
-                    (maxVal === null || value > maxVal)
-                ) {
+                if (typeof value === "number" && (maxVal === null || value > maxVal)) {
                     maxVal = value;
                 }
             });
         });
-        console.log(maxVal);
         sconable_columns = Object.keys(sconable.rows[0]);
+        isLoadingSconable = false;
     }
 
     function chunkArray(array, chunkSize) {
@@ -167,23 +180,31 @@
         }
         return results;
     }
+    let pamHighlights = [];
 
     async function Search_ExonInfo(cexon, ctranscript) {
-        console.log("param", cexon, ctranscript);
-        cexoninfo = exoninfo.filter(
-            (v) => v.Exon === cexon && v.Transcript === ctranscript,
-        );
+        isLoadingSequence = true;
+        cexoninfo = exoninfo.filter((v) => v.Exon === cexon && v.Transcript === ctranscript);
         const strand = Number(cexoninfo[0]?.Exon_strand) || 1;
 
         clickedRows = new Array(maxVal).fill(false);
         clickedRows[0] = true;
-        console.log(cexoninfo);
+
         sequence = await load(
             `scon_sites_by_transcript?species=${species}&ensemble_rev=109&exon=${cexon}&transcript=${ctranscript}&type=${selectedRadio}`,
         );
-        console.log(sequence, "seq");
+        pamHighlights = cexoninfo.flatMap((c) =>
+            c.scon_sites.map((s) => {
+                const start = Number(s.Tartget_start);
+                const end = Number(s.Tartget_end);
+                const PAM = s.PAM_position;
+                return { pos: (PAM === "right" ? end : start) };
+            }),
+        );
         chunkedSeq = chunkArray(sequence, 10);
+        isLoadingSequence = false;
     }
+
     let hoveredRow = null;
     let hoveredPAM = null;
 
@@ -201,6 +222,8 @@
             return {
                 target_start: s,
                 target_end: e,
+                PAM_position: c.PAM_position,
+                strand: Number(cexoninfo[0]?.Exon_strand) || 1,
             };
         });
 
@@ -242,6 +265,70 @@
         species = "";
         selected = "";
     }
+
+    function is100bpLine(pos, start) {
+        return (pos - start) % 100 === 0;
+    }
+
+    function isPAMLetter(pos) {
+        return pamHighlights.some(p => p.pos === pos);
+    }
+
+    function escapeCSV(value) {
+        if (typeof value === "string" && value.includes(",")) {
+            return `"${value.replace(/"/g, '""')}"`; // 큰따옴표 이스케이프
+        }
+        return value;
+    }
+
+    function downloadAllCSV() {
+        if (!cexoninfo || cexoninfo.length === 0) return;
+
+        const headers = [
+            "Exon", "Transcript", "Insertion_sequence", "Insertion_start",
+            "Insertion_end", "Left_remain", "Right_remain", "Self_complement",
+            "n_editable", "PAM_position", "Target_sequence", "Target_length",
+            "Target_start", "Target_end", "GC", "MM_score", "In_frame"
+        ];
+
+        const rows = cexoninfo.flatMap(c =>
+            c.scon_sites.map(site => [
+                c.Exon,
+                c.Transcript,
+                c.Insertion_sequence,
+                c.Insertion_start,
+                c.Insertion_end,
+                c.Left_remain,
+                c.Right_remain,
+                c.Self_complement,
+                c.n_editable,
+                site.PAM_position,
+                site.Target_sequence,
+                site.Target_length,
+                site.Tartget_start,
+                site.Tartget_end,
+                site.GC,
+                site.MM_score,
+                site["3N"] ?? ""
+            ])
+        );
+
+        const csvContent = [
+            headers.join(","),
+            ...rows.map(row => row.map(escapeCSV).join(","))
+        ].join("\n");
+
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `sconable_sites_${species}_${selected}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
     $: {
         if (selectedRadio) {
             load_data(selectedRadio);
@@ -262,10 +349,66 @@
         ? ">".repeat(sequence.length)
         : "<".repeat(sequence.length))
     : "";
+
+
+//This is for the stacking black line in scroll.
+    let targetBoxes = [];
+
+    function calculateTargetLayers(targets) {
+    const layers = [];
+
+    targets.forEach(({ start, end }) => {
+        let placed = false;
+
+        for (let layer of layers) {
+        const overlap = layer.some((b) => !(end < b.start || start > b.end));
+        if (!overlap) {
+            layer.push({ start, end });
+            placed = true;
+            break;
+        }
+        }
+
+        if (!placed) {
+        layers.push([{ start, end }]);
+        }
+    });
+
+    return layers.flatMap((layer, i) =>
+        layer.map((b) => ({ ...b, topOffset: -0.5 - i * 0.5 })) // ← 위로 위로 얇게!
+    );
+    }
+
+    $: if (sequence && cexoninfo) {
+    const rawTargets = cexoninfo.flatMap((c) =>
+        c.scon_sites.map((s) => {
+        let sPos = Number(s.Tartget_start);
+        let ePos = Number(s.Tartget_end);
+        if (sPos > ePos) [sPos, ePos] = [ePos, sPos]; // 🧠 여기!
+        return { start: sPos, end: ePos };
+        })
+    );
+
+    targetBoxes = calculateTargetLayers(rawTargets);
+
+    // 확인용 디버깅 로그
+    targetBoxes.forEach((box) => {
+        console.log("Box range relative to sequence:", {
+        startOffset: box.start - sequence[0].pos,
+        endOffset: box.end - sequence[0].pos,
+        width: box.end - box.start + 1,
+        });
+    });
+    }
+    
 </script>
 
-<div class="p-3 w-full">
-    <Heading class="p-5">SCON run</Heading>
+<div class="p-10 w-full">
+    <div class="w-full border-b border-gray-300 mb-4 pb-2">
+        <Heading size="2xl" class="text-gray-800 font-bold text-left px-6">
+          SCON analysis
+        </Heading>
+      </div>
     <div class="p-3 z-100">
         <P size="xl" weight="semibold">Search</P>
         <div class="p-3">
@@ -418,7 +561,12 @@
         </form>
     </div>
     <div class="p-3">
-        <P size="xl" weight="semibold" class="py-3">SCONable sites</P>
+        <div class="flex items-center gap-2">
+            <P size="xl" weight="semibold" class="py-3">SCON targetable sites</P>
+            {#if isLoadingSconable}
+                <Spinner size="6" color="green" />
+            {/if}
+        </div>
         {#if sconable}
             <Table class="overflow-x-scroll w-full outer-table">
                 <TableHead>
@@ -461,30 +609,30 @@
     </div>
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Gene"
         triggeredBy="#click"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click">The name of the gene containing the exon</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Transcript"
         triggeredBy="#click2"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click2"
         >The name of the transcript containing the exon
     </Popover>
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Exon"
         triggeredBy="#click3"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click3">The unique name or number of the exon</Popover
     >
     <Popover
@@ -493,151 +641,140 @@
         title="Exon usage"
         triggeredBy="#click4"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click4"
         >1 if the exon is included in all transcripts</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Exon size"
         triggeredBy="#click5"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click5">The length of the target exon (in bp)</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Exon strand"
         triggeredBy="#click6"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click6">The direction of the exon (e.g., + or -)</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Chromosome"
         triggeredBy="#click7"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click7"
         >The name of the chromosome where the exon is located</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Exon start"
         triggeredBy="#click8"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click8"
         >The start position of the exon (chromosomal coordinate)</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Exon end"
         triggeredBy="#click9"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click9"
         >The end position of the exon (chromosomal coordinate)</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="w-64 text-sm font-light z-9999"
         title="Cumulative CDS size"
         triggeredBy="#click10"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click10"
         >Cumulative coding sequence length in the transcript up to the current
         exon</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
-        title="Coding_size_T"
+        class="w-64 text-sm font-light z-9999"
+        title="Total Coding size"
         triggeredBy="#click11"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click11"
         >The total coding sequence length of the transcript</Popover
     >
 
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="popover-fix w-64 text-sm font-light"
         title="Insertion_sequence"
         triggeredBy="#click12"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click12"
         >Refers to the target sequence, either MAGR or VDGN</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="popover-fix w-64 text-sm font-light"
         title="Insertion_start"
         triggeredBy="#click13"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click13"
-        >Start position of the target
+        >Start position of the target sequence
     </Popover>
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="popover-fix w-64 text-sm font-light"
         title="Insertion_end"
         triggeredBy="#click14"
         trigger="click"
-        placement="top"
-        reference="#click14">End position of the target</Popover
+        placement="bottom"
+        reference="#click14">End position of the target sequence</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="popover-fix w-64 text-sm font-light"
         title="Left_remain"
         triggeredBy="#click15"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click15"
         >Length of the remaining sequence on the left when the target is cut
         (e.g., MAG|R or VDG|N)</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="popover-fix w-64 text-sm font-light"
         title="Right_remain"
         triggeredBy="#click16"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click16"
-        >Length of the remaining sequence on the right when the target is cut</Popover
-    >
-
-    <Popover
-        arrow={false}
-        class="w-64 text-sm font-light z-100"
-        title="Self_complement"
-        triggeredBy="#click18"
-        trigger="click"
-        placement="top"
-        reference="#click18"
-        >Number of possible occurrences where the CRISPR gRNA target sequence
-        forms a secondary hairpin structure</Popover
+        >Length of the remaining sequence on the right when the target is cut
+        (e.g., MAG|R or VDG|N)</Popover
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100 "
+        class="popover-fix w-64 text-sm font-light"
         title="n_editable"
         triggeredBy="#click19"
         trigger="click"
-        placement="top"
+        placement="bottom"
         reference="#click19"
-        >Number of CRISPR gRNA target sequences available for cutting the target</Popover
+        >Number of CRISPR gRNA target sequences available for inserting SCON to the target</Popover
     >
 
     <div class="p-3">
@@ -657,7 +794,7 @@
                 <TableHeadCell id="click8">Exon_start</TableHeadCell>
                 <TableHeadCell id="click9">Exon_end</TableHeadCell>
                 <TableHeadCell id="click10">Cumulative CDS size</TableHeadCell>
-                <TableHeadCell id="click11">coding_size_t</TableHeadCell>
+                <TableHeadCell id="click11">total coding size</TableHeadCell>
             </TableHead>
             {#if cexoninfo}
                 <TableBody tableBodyClass="divide-y">
@@ -686,66 +823,93 @@
         </Table>
     </div>
     <div class="p-3 z-0 w-full">
-        <P size="xl" weight="semibold" class="py-3">SCONable site list</P>
+        <div class="flex items-center gap-2">
+            <P size="xl" weight="semibold" class="py-3">Sequence browser</P>
+            {#if isLoadingSequence}
+                <Spinner size="6" color="green" />
+            {/if}
+        </div>
 
-        <!--<div class="p-3 flex flex-wrap font-mono text-[15px] w-[calc(150*1ch)]">
-            {#if sequence && cexoninfo && chunkedSeq}
-                {#each chunkedSeq as chunk}
-                    <div class="whitespace-pre">
-                        {#each chunk as s, i}
-                            <span
-                                class="inline-block w-[1ch] {getClassForBackground(
-                                    s,
-                                    hoveredRow,
-                                    hoveredPAM,
-                                )}"
-                                class:font-bold={hoveredRow &&
-                                    s.pos >= hoveredRow.start &&
-                                    s.pos <= hoveredRow.end}
-                                class:text-emerald-400={s.className.includes(
-                                    "exon",
-                                ) && s.className.includes("left-pam")}
-                                class:text-emerald-800={s.className.includes(
-                                    "exon",
-                                ) && s.className.includes("right-pam")}
-                                class:text-red-700={s.className.includes(
-                                    "exon",
-                                ) && s.className.includes("scon_MAGR")}
-                            >
-                                {s.base}
-                            </span>
+        {#if sequence && cexoninfo}
+        <div class="relative">
+            <!-- 고정된 레전드 박스 -->
+            <div class="absolute top-3 left-3 z-50 bg-white border border-gray-300 p-3 rounded-md shadow-md text-sm space-y-1">
+              <div><span class="text-gray-600 font-mono text-xs">5’ → 3’ direction</span></div>
+              <div class="flex items-center gap-2">
+                <span class="w-4 h-4 bg-red-700 inline-block rounded-sm"></span>
+                <span class="text-gray-800">SCON Target (MAGR/VDGN)</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-4 h-4 bg-emerald-400 inline-block rounded-sm"></span>
+                <span class="text-gray-800">PAM Position</span>
+              </div>
+            </div>
+            <div class="overflow-x-auto">
+                <div class="relative flex flex-col min-w-max font-mono text-[15px] max-h-[28em] overflow-y-auto">
+    
+                    <!-- 🎯 검정박스: 타겟 위치 표시 -->
+                    {#each targetBoxes as box}
+                    {@html (() => {
+                    console.log(box.start, box.end, sequence[0].pos, box.topOffset);
+                    return '';
+                    })()}
+                        <div
+                        class="absolute bg-black h-[0.33em] rounded-sm"
+                        style="
+                        left: calc(({box.start - sequence[0].pos}) * 1ch);
+                        width: calc(({box.end - box.start + 1}) * 1ch);
+                        top: calc(10em + {box.topOffset}em);
+                        "
+                        ></div>
+                {/each}
+                    <!-- 100bp 선 + 숫자 -->
+                    <div class="absolute top-0 left-0 flex w-full pointer-events-none h-[10em] z-20">
+                        {#each sequence as s, i}
+                        <div class="relative w-[1ch] text-center">
+                            {#if s.pos % 100 === 0}
+                            <div class="absolute bottom-0 left-1/2 -translate-x-1/2 h-[10em] w-[1px] bg-gray-500"></div>
+                            <div class="absolute bottom-[10em] left-1/2 -translate-x-1/2 text-[10px] text-gray-500">
+                                {s.pos}
+                            </div>
+                            {/if}
+                        </div>
                         {/each}
                     </div>
-                {/each}
-            {/if}-->
-        {#if sequence && cexoninfo}
-            <div class="overflow-x-auto">
-                <div class="flex flex-col min-w-max font-mono text-[15px]">
-                  <div class="flex leading-none">
+                    <!-- 시퀀스 줄 -->
+                    <div class="flex leading-none z-10 mt-[10em]">
+                        {#each sequence as s}
+                        <span
+                            class="w-[1ch] text-center {getClassForBackground(s, hoveredRow, hoveredPAM)}"
+                            class:font-bold={hoveredRow && s.pos >= hoveredRow.start && s.pos <= hoveredRow.end}
+                            class:text-emerald-400={isPAMLetter(s.pos)}
+                            class:text-red-700={s.className.includes("exon") && s.className.includes("scon_MAGR")}
+                        >
+                            {s.base}
+                        </span>
+                        {/each}
+                    </div>
+                <!-- 꺽쇠 줄 -->
+                <div class="flex leading-none text-gray-300 z-0">
                     {#each chevronTrack.split("") as c}
-                      <span class="w-[1ch] text-center text-gray-300">{c}</span>
+                    <span class="w-[1ch] text-center">{c}</span>
                     {/each}
-                  </div>
-                  <div class="flex leading-none">
-                    {#each sequence as s}
-                      <span
-                        class="w-[1ch] text-center {getClassForBackground(s, hoveredRow, hoveredPAM)}"
-                        class:font-bold={hoveredRow && s.pos >= hoveredRow.start && s.pos <= hoveredRow.end}
-                        class:text-emerald-400={s.className.includes("exon") && s.className.includes("left-pam")}
-                        class:text-emerald-800={s.className.includes("exon") && s.className.includes("right-pam")}
-                        class:text-red-700={s.className.includes("exon") && s.className.includes("scon_MAGR")}
-                      >
-                        {s.base}
-                      </span>
-                    {/each}
-                  </div>
                 </div>
-              </div>
-            {/if}
+                </div>
+            </div>
+        </div>
+        {/if}
         <div class="max-h-[40rem] overflow-y-auto">
+            <div class="flex justify-end mb-2">
+                <Button
+                    class="text-sm px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
+                    on:click={downloadAllCSV}
+                >
+                    ⬇ Download
+                </Button>
+            </div>
             <Table>
                 <TableHead>
-                    <TableHeadCell>n_editable</TableHeadCell>
+                    <TableHeadCell></TableHeadCell>
                     <TableHeadCell id="click12"
                         >Insertion_sequence</TableHeadCell
                     >
@@ -753,7 +917,6 @@
                     <TableHeadCell id="click14">Insertion_end</TableHeadCell>
                     <TableHeadCell id="click15">Left_remain</TableHeadCell>
                     <TableHeadCell id="click16">Right_remain</TableHeadCell>
-                    <TableHeadCell id="click18">Self_complement</TableHeadCell>
                     <TableHeadCell id="click19">n_editable</TableHeadCell>
                 </TableHead>
                 {#if sequence && cexoninfo}
@@ -798,10 +961,6 @@
                                 <TableBodyCell id="click16"
                                     >{c.Right_remain}</TableBodyCell
                                 >
-
-                                <TableBodyCell id="click18"
-                                    >{c.Self_complement}</TableBodyCell
-                                >
                                 <TableBodyCell id="click12"
                                     >{c.n_editable}</TableBodyCell
                                 >
@@ -828,32 +987,26 @@
                                                     <TableHeadCell id="click24"
                                                         >Target_end</TableHeadCell
                                                     >
-                                                    <TableHeadCell
-                                                        >Left_remain</TableHeadCell
-                                                    >
-                                                    <TableHeadCell
-                                                        >Right_remain</TableHeadCell
-                                                    >
                                                     <TableHeadCell id="click17"
                                                         >GC</TableHeadCell
                                                     >
-                                                    <TableHeadCell
+                                                    <TableHeadCell id="click18"
                                                         >Self_complement</TableHeadCell
                                                     >
                                                     <TableHeadCell id="click25"
                                                         >mm_score</TableHeadCell
                                                     >
-                                                    <TableHeadCell
+                                                    <TableHeadCell id="click26"
                                                         >in_frame</TableHeadCell
                                                     >
                                                 </TableHead>
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-72 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="PAM_position"
                                                     triggeredBy="#click20"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click20"
                                                     >Position of the PAM
                                                     sequence relative to the
@@ -861,71 +1014,94 @@
                                                 >
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-72 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="Target_sequence"
                                                     triggeredBy="#click21"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click21"
                                                     >CRISPR gRNA target sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-72 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="Target_length"
                                                     triggeredBy="#click22"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click22"
                                                     >Length of the CRISPR gRNA
                                                     target sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-72 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="Target_start"
                                                     triggeredBy="#click23"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click23"
                                                     >Start position of the
                                                     CRISPR gRNA target sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-72 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="Target_end"
                                                     triggeredBy="#click24"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click24"
                                                     >End position of the CRISPR
                                                     gRNA target sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-72 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="mm_score"
                                                     triggeredBy="#click25"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click25"
                                                     >Mismatch score indicating
                                                     how frequently the CRISPR
                                                     gRNA target sequence maps to
-                                                    the entire sequence</Popover
+                                                    the entire sequence (MM0,MM1,MM2)</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
-                                                    class="w-64 text-sm font-light z-100 text-wrap"
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
                                                     title="GC"
                                                     triggeredBy="#click17"
                                                     trigger="click"
-                                                    placement="top"
+                                                    placement="bottom"
                                                     reference="#click17"
                                                     >GC content of the CRISPR
                                                     gRNA target sequence for
                                                     cutting the target</Popover
+                                                >
+                                                <Popover
+                                                    arrow={false}
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
+                                                    title="Self_complement"
+                                                    triggeredBy="#click18"
+                                                    trigger="click"
+                                                    placement="bottom"
+                                                    reference="#click18"
+                                                    >Number of possible occurrences where the CRISPR gRNA target sequence
+                                                    forms a secondary hairpin structure</Popover
+                                                >
+                                                <Popover
+                                                    arrow={false}
+                                                    class="popover-fix w-64 text-sm font-light z-9999 text-wrap"
+                                                    title="In_frame"
+                                                    triggeredBy="#click26"
+                                                    trigger="click"
+                                                    placement="bottom"
+                                                    reference="#click26"
+                                                    >Whether the coding sequence remains in frame or 
+                                                    shifts the reading frame when alternative splicing occurs
+                                                    </Popover
                                                 >
                                                 {#each c.scon_sites as ss}
                                                     <TableBody
@@ -968,12 +1144,6 @@
                                                             >
                                                             <TableBodyCell
                                                                 >{ss.Tartget_end}</TableBodyCell
-                                                            >
-                                                            <TableBodyCell
-                                                                >{ss.Left_remain}</TableBodyCell
-                                                            >
-                                                            <TableBodyCell
-                                                                >{ss.Right_remain}</TableBodyCell
                                                             >
                                                             <TableBodyCell
                                                                 >{ss.GC}</TableBodyCell
@@ -1022,10 +1192,14 @@
     .inner-table-container {
         width: 100%;
         overflow-x: auto;
+        z-index: 0 !important;
+        position: relative !important;
     }
     .inner-table {
         width: 100%;
         border-collapse: collapse;
+        position: relative;
+        z-index: 0;
     }
     .inner-table th,
     .inner-table td {
@@ -1036,5 +1210,14 @@
         width: 100%;
     }
 
+    .popover-fix {
+        position: fixed !important;
+        z-index: 9999 !important; 
+    }
+
+    .max-h-\[40rem\] {
+        position: relative;
+        z-index: 0 !important;
+    }
     @import "https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css";
 </style>
