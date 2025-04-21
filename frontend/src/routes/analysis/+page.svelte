@@ -67,7 +67,7 @@
 
     async function load_data(selectedRadio) {
         const metaData = await load(`meta/dataset?type=${selectedRadio}`);
-        //console.log("🐭 metaData loaded:", metaData);
+        //console.log(" metaData loaded:", metaData);
         const filtered = metaData.filter(e => {
             if (e.species === "mus_musculus") {
                 return e.ensemble_rev === 109;
@@ -75,7 +75,6 @@
             return true;
         });
 
-        // 중복 제거
         allSpecies = [...new Set(filtered.map(e => e.species))];
     }
 
@@ -235,6 +234,12 @@
         hoveredPAM = null;
     }
 
+    function highlightFromBox(start, end) {
+        if (start > end) [start, end] = [end, start];
+        hoveredRow = { index: -1, start, end };
+        hoveredPAM = null;
+    }
+
     function isPAMPosition(pos, PAM) {
         if (!PAM) return false;
         return PAM.some((site) =>
@@ -266,17 +271,13 @@
         selected = "";
     }
 
-    function is100bpLine(pos, start) {
-        return (pos - start) % 100 === 0;
-    }
-
     function isPAMLetter(pos) {
         return pamHighlights.some(p => p.pos === pos);
     }
 
     function escapeCSV(value) {
         if (typeof value === "string" && value.includes(",")) {
-            return `"${value.replace(/"/g, '""')}"`; // 큰따옴표 이스케이프
+            return `"${value.replace(/"/g, '""')}"`; 
         }
         return value;
     }
@@ -329,6 +330,72 @@
         document.body.removeChild(link);
     }
 
+
+    function downloadHomologyArmsSingle(c) {
+        if (!sequence || !c) return;
+
+        const strand = Number(c.Exon_strand || 1);
+        const insSeq = c.Insertion_sequence;
+        const insStart = Number(c.Insertion_start);
+        const insEnd = Number(c.Insertion_end);
+        const cutSite = strand === 1 ? insStart : insEnd;
+
+        const leftFlankLen = 57;
+        const rightFlankLen = 59;
+        const left3 = insSeq.slice(0, 3);
+        const right1 = insSeq.slice(-1);
+
+        let leftFlank, rightFlank, left_arm, right_arm;
+
+        if (strand === 1) {
+            const leftStart = cutSite - leftFlankLen;
+            const leftEnd = cutSite;
+            const rightStart = insEnd + 1;
+            const rightEnd = insEnd + rightFlankLen + 1;
+
+            leftFlank = sequence.filter(s => s.pos >= leftStart && s.pos < leftEnd).map(s => s.base).join("");
+            rightFlank = sequence.filter(s => s.pos >= rightStart && s.pos < rightEnd).map(s => s.base).join("");
+
+            left_arm = leftFlank + left3;
+            right_arm = right1 + rightFlank;
+        } else {
+            const leftStart = insStart - 5 - leftFlankLen;
+            const leftEnd = insStart - 3;
+            const rightStart = cutSite + 4;
+            const rightEnd = cutSite + 2 + rightFlankLen;
+
+            leftFlank = sequence.filter(s => s.pos >= leftStart && s.pos < leftEnd).map(s => s.base).join("");
+            rightFlank = sequence.filter(s => s.pos >= rightStart && s.pos < rightEnd).map(s => s.base).join("");
+
+            leftFlank = reverseSeq(leftFlank);
+            rightFlank = reverseSeq(rightFlank);
+
+            left_arm = rightFlank + left3;
+            right_arm = right1 + leftFlank;
+        }
+
+        const header = `>Exon_${c.Exon}_Transcript_${c.Transcript}_Insertion_${insSeq}_${c.Insertion_start}-${c.Insertion_end}_5'->3'`;
+        const SCON = "GTAAGTAATAACTTCGTATAAGGTATCCTATACGAAGTTATTCTCTCTGCCTATTGGGGTTACAAGACAGGTTTAAGGAGACCAATAGAAACTGGGCATGTGGAGACAGAGAAGACTCTTGGGTTTCTGATAGGCACTGACATAACTTCGTATAAGGTATCCTATACGAAGTTATTTTCCCTCCCTCAG";
+        const sequenceLine = left_arm + SCON + right_arm;
+
+        const content = `${header}\n${sequenceLine}`;
+        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `ssODN_${species}_${selected}.fa`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function reverseSeq(seq) {
+        const comp = { A: "T", T: "A", C: "G", G: "C", N: "N" };
+        return seq.split("").reverse().map(b => comp[b] || b).join("");
+    }
+
+
     $: {
         if (selectedRadio) {
             load_data(selectedRadio);
@@ -355,50 +422,56 @@
     let targetBoxes = [];
 
     function calculateTargetLayers(targets) {
-    const layers = [];
+        const layers = [];
 
-    targets.forEach(({ start, end }) => {
-        let placed = false;
+        targets.forEach((box) => {
+            let placed = false;
 
-        for (let layer of layers) {
-        const overlap = layer.some((b) => !(end < b.start || start > b.end));
-        if (!overlap) {
-            layer.push({ start, end });
-            placed = true;
-            break;
-        }
-        }
+            for (let layer of layers) {
+                const overlap = layer.some((b) => !(box.end < b.start || box.start > b.end));
+                if (!overlap) {
+                    layer.push(box); 
+                    placed = true;
+                    break;
+                }
+            }
 
-        if (!placed) {
-        layers.push([{ start, end }]);
-        }
-    });
+            if (!placed) {
+                layers.push([box]); 
+            }
+        });
 
-    return layers.flatMap((layer, i) =>
-        layer.map((b) => ({ ...b, topOffset: -0.5 - i * 0.5 })) // ← 위로 위로 얇게!
-    );
+        return layers.flatMap((layer, i) =>
+            layer.map((b) => ({ ...b, topOffset: -0.5 - i * 0.5 })) 
+        );
     }
 
     $: if (sequence && cexoninfo) {
-    const rawTargets = cexoninfo.flatMap((c) =>
-        c.scon_sites.map((s) => {
-        let sPos = Number(s.Tartget_start);
-        let ePos = Number(s.Tartget_end);
-        if (sPos > ePos) [sPos, ePos] = [ePos, sPos]; // 🧠 여기!
-        return { start: sPos, end: ePos };
-        })
-    );
+        const strand = Number(cexoninfo[0]?.Exon_strand) || 1;
 
-    targetBoxes = calculateTargetLayers(rawTargets);
+        const rawTargets = cexoninfo.flatMap((c) =>
+            c.scon_sites.map((s) => {
+                let sPos = Number(s.Tartget_start);
+                let ePos = Number(s.Tartget_end);
+                if (sPos > ePos) [sPos, ePos] = [ePos, sPos];
 
-    // 확인용 디버깅 로그
-    targetBoxes.forEach((box) => {
-        console.log("Box range relative to sequence:", {
-        startOffset: box.start - sequence[0].pos,
-        endOffset: box.end - sequence[0].pos,
-        width: box.end - box.start + 1,
-        });
-    });
+                const rawPam = s.PAM_position;
+                const correctedPam =
+                    strand === -1
+                        ? rawPam === "right"
+                            ? "left"
+                            : "right"
+                        : rawPam;
+
+                return {
+                    start: sPos,
+                    end: ePos,
+                    pam: correctedPam,
+                };
+            })
+        );
+
+        targetBoxes = calculateTargetLayers(rawTargets);
     }
     
 </script>
@@ -406,7 +479,7 @@
 <div class="p-10 w-full">
     <div class="w-full border-b border-gray-300 mb-4 pb-2">
         <Heading size="2xl" class="text-gray-800 font-bold text-left px-6">
-          SCON analysis
+          SCON targetable site
         </Heading>
       </div>
     <div class="p-3 z-100">
@@ -431,65 +504,6 @@
                 VDGN
             </Radio>
         </div>
-        <!--<div class="flex">
-            <div class="relative">
-                <Label for="species_input" class="mb-2">Species</Label>
-                <input
-                    type="text"
-                    id="species_input"
-                    bind:value={species}
-                    required
-                    on:input={handleInput}
-                    class="block disabled:cursor-not-allowed disabled:opacity-50 rtl:text-right p-2.5 focus:border-green-400 focus:ring-green-400 dark:focus:border-green-400 dark:focus:ring-green-400 bg-gray-50 text-gray-900 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400 border-gray-300 dark:border-gray-600 text-sm rounded-lg suggestions-list"
-                />
-                {#if suggestions.length > 0}
-                    <ul
-                        class="absolute suggestions-list bg-white border border-gray-300 mt-2 rounded-lg shadow-lg flex flex-col z-10"
-                    >
-                        {#each suggestions as suggestion}
-                            <button
-                                class="p-2 cursor-pointer hover:bg-gray-100"
-                                on:click={() =>
-                                    handleSuggestionClick(suggestion)}
-                            >
-                                {suggestion}
-                            </button>
-                        {/each}
-                    </ul>
-                {/if}-
-            </div>
-            <div class="ml-3">
-                <Label for="select_input" class="mb-2">Genes</Label>
-                <input
-                    type="text"
-                    id="select_input"
-                    bind:value={selected}
-                    required
-                    on:input={handleSelectInput}
-                    class="block rounded-e-none disabled:cursor-not-allowed disabled:opacity-50 rtl:text-right p-2.5 focus:border-green-400 focus:ring-green-400 dark:focus:border-green-400 dark:focus:ring-green-400 bg-gray-50 text-gray-900 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400 border-gray-300 dark:border-gray-600 text-sm suggestions-list"
-                />
-                {#if selectSuggestions.length > 0}
-                    <ul
-                        class="absolute suggestions-list bg-white border border-gray-300 mt-2 rounded-lg shadow-lg flex flex-col z-10"
-                    >
-                        {#if isLoading}
-                            <Spinner class="m-5" color="green" />
-                        {:else}
-                            {#each selectSuggestions as suggestion}
-                                <button
-                                    class="p-2 cursor-pointer hover:bg-gray-100"
-                                    on:click={() =>
-                                        handleSelectSuggestionClick(suggestion)}
-                                >
-                                    {suggestion}
-                                </button>
-                            {/each}
-                        {/if}
-                    </ul>
-                {/if}
-            </div>
-        </div>
-    </div>-->
         <form class="flex">
             <div class="relative">
                 <input
@@ -572,7 +586,7 @@
                 <TableHead>
                     {#each sconable.columns as s, i}
                         {#if s === "Exon"}
-                            <TableHeadCell>{s}</TableHeadCell>
+                            <TableHeadCell>{s}/Transcript</TableHeadCell>
                         {:else}
                             <TableHeadCell>
                                 <A
@@ -609,7 +623,7 @@
     </div>
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Gene"
         triggeredBy="#click"
         trigger="click"
@@ -618,7 +632,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Transcript"
         triggeredBy="#click2"
         trigger="click"
@@ -628,7 +642,7 @@
     </Popover>
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Exon"
         triggeredBy="#click3"
         trigger="click"
@@ -637,7 +651,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-100"
+        class="popover-fix w-64 text-sm font-light z-100"
         title="Exon usage"
         triggeredBy="#click4"
         trigger="click"
@@ -647,7 +661,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Exon size"
         triggeredBy="#click5"
         trigger="click"
@@ -656,7 +670,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Exon strand"
         triggeredBy="#click6"
         trigger="click"
@@ -665,7 +679,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Chromosome"
         triggeredBy="#click7"
         trigger="click"
@@ -695,7 +709,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Cumulative CDS size"
         triggeredBy="#click10"
         trigger="click"
@@ -706,7 +720,7 @@
     >
     <Popover
         arrow={false}
-        class="w-64 text-sm font-light z-9999"
+        class="popover-fix w-64 text-sm font-light z-9999"
         title="Total Coding size"
         triggeredBy="#click11"
         trigger="click"
@@ -774,7 +788,7 @@
         trigger="click"
         placement="bottom"
         reference="#click19"
-        >Number of CRISPR gRNA target sequences available for inserting SCON to the target</Popover
+        >Number of CRISPR sgRNA target sequences available for inserting SCON to the target</Popover
     >
 
     <div class="p-3">
@@ -832,7 +846,10 @@
 
         {#if sequence && cexoninfo}
         <div class="relative">
-            <!-- 고정된 레전드 박스 -->
+            <div class="text-center text-gray-700 text-sm font-mono pb-2">
+                chr{cexoninfo[0].Chromosome}:{Number(cexoninfo[0].Exon_start).toLocaleString()}-{Number(cexoninfo[0].Exon_end).toLocaleString()}
+            </div>
+            <!-- fixed legend box -->
             <div class="absolute top-3 left-3 z-50 bg-white border border-gray-300 p-3 rounded-md shadow-md text-sm space-y-1">
               <div><span class="text-gray-600 font-mono text-xs">5’ → 3’ direction</span></div>
               <div class="flex items-center gap-2">
@@ -847,22 +864,32 @@
             <div class="overflow-x-auto">
                 <div class="relative flex flex-col min-w-max font-mono text-[15px] max-h-[28em] overflow-y-auto">
     
-                    <!-- 🎯 검정박스: 타겟 위치 표시 -->
+                    <!-- BLACK BOX : Target position -->
                     {#each targetBoxes as box}
-                    {@html (() => {
-                    console.log(box.start, box.end, sequence[0].pos, box.topOffset);
-                    return '';
-                    })()}
                         <div
-                        class="absolute bg-black h-[0.33em] rounded-sm"
+                        class="absolute h-[0.33em] rounded-sm hover:cursor-pointer"
                         style="
-                        left: calc(({box.start - sequence[0].pos}) * 1ch);
-                        width: calc(({box.end - box.start + 1}) * 1ch);
-                        top: calc(10em + {box.topOffset}em);
+                            left: calc(({box.start - sequence[0].pos}) * 1ch);
+                            width: calc(({box.end - box.start + 1}) * 1ch);
+                            top: calc(10em + {box.topOffset}em);
                         "
-                        ></div>
-                {/each}
-                    <!-- 100bp 선 + 숫자 -->
+                        role="button"
+                        tabindex="0"
+                        on:mouseover={() => highlightFromBox(box.start, box.end)}
+                        on:mouseout={handleRowMouseLeave}
+                        on:focus={() => highlightFromBox(box.start, box.end)}
+                        on:blur={handleRowMouseLeave}
+                        >
+                        <div class="absolute inset-0 bg-black rounded-sm"></div>
+                    
+                        {#if box.pam === "left"}
+                            <div class="absolute left-0 w-[3ch] h-full bg-emerald-400 rounded-sm"></div>
+                        {:else if box.pam === "right"}
+                            <div class="absolute right-0 w-[3ch] h-full bg-emerald-400 rounded-sm"></div>
+                        {/if}
+                        </div>
+                    {/each}
+                    <!-- 100bp line + number -->
                     <div class="absolute top-0 left-0 flex w-full pointer-events-none h-[10em] z-20">
                         {#each sequence as s, i}
                         <div class="relative w-[1ch] text-center">
@@ -875,7 +902,17 @@
                         </div>
                         {/each}
                     </div>
-                    <!-- 시퀀스 줄 -->
+                    <!-- 25bp dot line -->
+                    <div class="absolute top-0 left-0 flex w-full pointer-events-none h-[10em] z-10">
+                        {#each sequence as s (s.pos)}
+                        <div class="relative w-[1ch] text-center">
+                            {#if s.pos % 25 === 0 && s.pos % 100 !== 0}
+                            <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[2em] w-[1px] border-l border-dashed border-gray-400"></div>
+                            {/if}
+                        </div>
+                        {/each}
+                    </div>
+                    <!-- sequence line -->
                     <div class="flex leading-none z-10 mt-[10em]">
                         {#each sequence as s}
                         <span
@@ -888,7 +925,7 @@
                         </span>
                         {/each}
                     </div>
-                <!-- 꺽쇠 줄 -->
+                <!-- chevron line -->
                 <div class="flex leading-none text-gray-300 z-0">
                     {#each chevronTrack.split("") as c}
                     <span class="w-[1ch] text-center">{c}</span>
@@ -904,7 +941,7 @@
                     class="text-sm px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
                     on:click={downloadAllCSV}
                 >
-                    ⬇ Download
+                    ⬇ Download table
                 </Button>
             </div>
             <Table>
@@ -969,7 +1006,16 @@
                             {#if clickedRows[i]}
                                 <TableBodyRow class="bg-gray-100">
                                     <TableBodyCell colspan="11">
-                                        <div class="inner-table-container">
+                                        <div class="flex items-start gap-4">
+                                            <div class="min-w-max pt-1">
+                                                <Button
+                                                    class="text-sm px-2 py-1 mb-2 bg-green-500 text-white hover:bg-green-600 rounded"
+                                                    on:click={() => downloadHomologyArmsSingle(c)}
+                                                >
+                                                    🧬Download ssODN
+                                                </Button>
+                                            </div>
+                                        <div class="inner-table-container pl-5">
                                             <Table class="inner-table">
                                                 <TableHead>
                                                     <TableHeadCell id="click20"
@@ -1010,7 +1056,7 @@
                                                     reference="#click20"
                                                     >Position of the PAM
                                                     sequence relative to the
-                                                    CRISPR gRNA target sequence</Popover
+                                                    CRISPR sgRNA sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
@@ -1020,7 +1066,7 @@
                                                     trigger="click"
                                                     placement="bottom"
                                                     reference="#click21"
-                                                    >CRISPR gRNA target sequence</Popover
+                                                    >CRISPR sgRNA sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
@@ -1030,8 +1076,8 @@
                                                     trigger="click"
                                                     placement="bottom"
                                                     reference="#click22"
-                                                    >Length of the CRISPR gRNA
-                                                    target sequence</Popover
+                                                    >Length of the CRISPR sgRNA
+                                                    sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
@@ -1042,7 +1088,7 @@
                                                     placement="bottom"
                                                     reference="#click23"
                                                     >Start position of the
-                                                    CRISPR gRNA target sequence</Popover
+                                                    CRISPR sgRNA sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
@@ -1053,7 +1099,7 @@
                                                     placement="bottom"
                                                     reference="#click24"
                                                     >End position of the CRISPR
-                                                    gRNA target sequence</Popover
+                                                    sgRNA sequence</Popover
                                                 >
                                                 <Popover
                                                     arrow={false}
@@ -1065,7 +1111,7 @@
                                                     reference="#click25"
                                                     >Mismatch score indicating
                                                     how frequently the CRISPR
-                                                    gRNA target sequence maps to
+                                                    sgRNA sequence maps to
                                                     the entire sequence (MM0,MM1,MM2)</Popover
                                                 >
                                                 <Popover
@@ -1077,7 +1123,7 @@
                                                     placement="bottom"
                                                     reference="#click17"
                                                     >GC content of the CRISPR
-                                                    gRNA target sequence for
+                                                    sgRNA sequence for
                                                     cutting the target</Popover
                                                 >
                                                 <Popover
@@ -1088,7 +1134,7 @@
                                                     trigger="click"
                                                     placement="bottom"
                                                     reference="#click18"
-                                                    >Number of possible occurrences where the CRISPR gRNA target sequence
+                                                    >Number of possible occurrences where the CRISPR sgRNA sequence
                                                     forms a secondary hairpin structure</Popover
                                                 >
                                                 <Popover
@@ -1163,6 +1209,7 @@
                                                     </TableBody>
                                                 {/each}
                                             </Table>
+                                            </div>
                                         </div>
                                     </TableBodyCell>
                                 </TableBodyRow>
